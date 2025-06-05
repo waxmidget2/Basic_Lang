@@ -19,8 +19,9 @@
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/Reassociate.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
-#include "llvm/Support/Error.h"
+#include "llvm/Support/Error.h" 
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
+
 
 #include <algorithm>
 #include <cassert>
@@ -32,15 +33,18 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <iostream>
+#include <iostream> 
+
 
 enum Token {
  tok_eof = -1,
  tok_def = -2,
  tok_extern = -3,
+
  tok_identifier = -4,
  tok_number = -5,
 };
+
 
 class ExprAST;
 class NumberExprAST;
@@ -65,6 +69,7 @@ static std::unique_ptr<llvm::StandardInstrumentations> TheSI;
 static std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;
 static llvm::ExitOnError ExitOnErr;
 
+// Base class for expression nodes.
 class ExprAST {
  public:
    virtual ~ExprAST() = default;
@@ -85,6 +90,7 @@ class VariableExprAST : public ExprAST {
 
  public:
    VariableExprAST(const std::string& Name) : Name(Name) {}
+    const std::string &getName() const { return Name; }
    llvm::Value *codegen() override;
 };
 
@@ -128,17 +134,31 @@ class FunctionAST {
    std::unique_ptr<ExprAST> Body;
  
  public:
-   FunctionAST(std::unique_ptr<PrototypeAST> Proto,
-               std::unique_ptr<ExprAST> Body)
-       : Proto(std::move(Proto)), Body(std::move(Body)) {}
-   llvm::Function *codegen();
+  FunctionAST(std::unique_ptr<PrototypeAST> Proto,
+              std::unique_ptr<ExprAST> Body)
+      : Proto(std::move(Proto)), Body(std::move(Body)) {}
+  llvm::Function *codegen();
 };
 
+class AssignExprAST : public ExprAST {
+private:
+  std::string VarName;
+  std::unique_ptr<ExprAST> Expr;
+public:
+  AssignExprAST(const std::string &VarName, std::unique_ptr<ExprAST> Expr)
+      : VarName(VarName), Expr(std::move(Expr)) {}
+  const std::string &getName() const { return VarName; }
+  llvm::Value *codegen() override;
+};
+ // error reporting
 llvm::Value *LogErrorV(const char *Str) {
  llvm::errs() << "LLVM Error: " << Str << '\n';
  return nullptr;
 }
-
+// llvm::Function *LogErrorF(const char *Str) { // This function is declared but not used in the snippet
+//  llvm::errs() << "LLVM Error: " << Str << '\n';
+//  return nullptr;
+// }
 llvm::Value *NumberExprAST::codegen() {
  return llvm::ConstantFP::get(*TheContext, llvm::APFloat(Val));
 }
@@ -170,9 +190,18 @@ llvm::Value *BinaryExprAST::codegen() {
      return LogErrorV("invalid binary operator");
  }
 }
+llvm::Value *AssignExprAST::codegen() {
+ llvm::Value *Val = Expr->codegen();
+ if (!Val)
+   return nullptr;
+ NamedValues[VarName] = Val;
+ return Val;
+}
 llvm::Value *CallExprAST::codegen() {
+ // Look up the name in the global module table.
  llvm::Function *CalleeF = TheModule->getFunction(Callee);
  if (!CalleeF) {
+   // If not, check if it's a known prototype.
    auto FI = FunctionProtos.find(Callee);
    if (FI != FunctionProtos.end()) {
        CalleeF = FI->second->codegen();
@@ -215,6 +244,7 @@ llvm::Function *FunctionAST::codegen() {
  if(!TheFunction) {
    return nullptr;
  }
+ 
 
  llvm::BasicBlock *BB = llvm::BasicBlock::Create(*TheContext, "entry", TheFunction);
  Builder->SetInsertPoint(BB);
@@ -228,12 +258,14 @@ llvm::Function *FunctionAST::codegen() {
 
    llvm::verifyFunction(*TheFunction);
    
+   // Run the optimizer on the function.
    if (TheFPM) {
        TheFPM->run(*TheFunction, *TheFAM);
    }
 
    return TheFunction;
  }
+ // Error reading body, remove function.
  TheFunction->eraseFromParent();
  return nullptr;
 }
@@ -244,7 +276,7 @@ struct lexer {
    int CurTok;
    int LastChar;
 
-   lexer() : CurTok(0), LastChar(' ') {}
+   lexer() : CurTok(0), LastChar(' ') {} // Initialize CurTok
    int gettok() {
        while (isspace(LastChar)) { LastChar = getchar(); }
 
@@ -252,7 +284,7 @@ struct lexer {
        IdentifierStr.clear();
        IdentifierStr += static_cast<char>(LastChar);
 
-       while(isalnum((LastChar = getchar()))) {
+       while(isalnum((LastChar = getchar()))) { // Corrected: assign then check
          IdentifierStr += static_cast<char>(LastChar);
        }
 
@@ -276,7 +308,7 @@ struct lexer {
        return tok_number;
      }
 
-     if (LastChar == '#') {
+     if (LastChar == '#') { // Comment until end of line
        do {
          LastChar = getchar();
        } while (LastChar != EOF && LastChar != '\n' && LastChar != '\r');
@@ -296,6 +328,7 @@ struct lexer {
    }
    const std::string& getIdentifierStr() const { return IdentifierStr; }
    double getNumVal() const { return NumVal; }
+   // void setCurTok(int tok) { CurTok = tok; } // Not used in this version
    int getCurTok() const { return CurTok; }
 };
 
@@ -308,15 +341,17 @@ class parser {
    parser(lexer& lexer_instance) : m_lexer(lexer_instance) {
      BinopPrecedence['<'] = 10;
      BinopPrecedence['+'] = 20;
-     BinopPrecedence['-'] = 20;
-     BinopPrecedence['*'] = 40;
+     BinopPrecedence['-'] = 20; // Same precedence as +
+     BinopPrecedence['*'] = 40; // Higher precedence
    }
 
+   
    int getTokPrecedence() {
      if (!isascii(m_lexer.getCurTok())) {
        return -1;
      }
 
+     // Make sure it's a declared binop.
      int TokPrec = BinopPrecedence[static_cast<char>(m_lexer.getCurTok())];
      if (TokPrec <= 0) return -1;
      return TokPrec;
@@ -334,17 +369,22 @@ class parser {
    }
 
    std::unique_ptr<ExprAST> ParsePrimary() {
-     switch(m_lexer.getCurTok()) {
-       default:
-         return LogError<ExprAST>("Unknown token when expecting an expression");
-       case tok_identifier:
-         return ParseIdentifierExpr();
-       case tok_number:
-         return ParseNumberExpr();
-       case '(':
-         return ParseParenExpr();
-     }
-   }
+    switch(m_lexer.getCurTok()) {
+      default:
+        return LogError<ExprAST>("Unknown token when expecting an expression");
+      case tok_identifier: {
+        auto LHS = ParseIdentifierExpr();
+        if (m_lexer.getCurTok() == '=') {
+          return ParseAssignmentExpr(std::move(LHS), *this);
+        }
+        return LHS;
+      }
+      case tok_number:
+        return ParseNumberExpr();
+      case '(':
+        return ParseParenExpr();
+    }
+  }
 
    std::unique_ptr<ExprAST> ParseExpression() {
      auto LHS = ParsePrimary();
@@ -357,12 +397,12 @@ class parser {
 
    std::unique_ptr<ExprAST> ParseNumberExpr() {
      auto Result = std::make_unique<NumberExprAST>(m_lexer.getNumVal());
-     getNextToken();
+     getNextToken(); // consume the number
      return std::move(Result);
    } 
    
    std::unique_ptr<ExprAST> ParseParenExpr() {
-     getNextToken();
+     getNextToken(); // eat (.
      auto V = ParseExpression();
      
      if (!V) {
@@ -373,20 +413,30 @@ class parser {
        return LogError<ExprAST>("expected ')'");
      }
      
-     getNextToken();
+     getNextToken(); // eat ).
      return V;
    }
-
+  std::unique_ptr<ExprAST> ParseAssignmentExpr(std::unique_ptr<ExprAST> LHS, parser &p) {
+    auto *Var = dynamic_cast<VariableExprAST*>(LHS.get());
+    if (!Var)
+      return nullptr;
+    p.getNextToken(); // eat '='
+    auto RHS = p.ParseExpression();
+    if (!RHS)
+      return nullptr;
+    return std::make_unique<AssignExprAST>(Var->getName(), std::move(RHS));
+  }
    std::unique_ptr<ExprAST> ParseIdentifierExpr() {
      std::string IdName = m_lexer.getIdentifierStr();
 
-     getNextToken();
+     getNextToken(); // eat identifier.
 
-     if (m_lexer.getCurTok() != '(') {
+     if (m_lexer.getCurTok() != '(') { // Simple variable ref.
        return std::make_unique<VariableExprAST> (IdName);
      }
 
-     getNextToken();
+     // Call.
+     getNextToken(); // eat (
      std::vector<std::unique_ptr<ExprAST>> Args;
      
      if(m_lexer.getCurTok() != ')') {
@@ -405,7 +455,7 @@ class parser {
          getNextToken();
        }
      }
-     getNextToken();
+     getNextToken(); // Eat the ')'.
 
      return std::make_unique<CallExprAST> (IdName, std::move(Args));
    }
@@ -418,7 +468,7 @@ class parser {
        }
 
        int BinOp = m_lexer.getCurTok();
-       getNextToken();
+       getNextToken(); // eat binop
 
        auto RHS = ParsePrimary();
        if (!RHS) {
@@ -447,18 +497,19 @@ class parser {
      }
 
      std::vector<std::string> ArgNames;
+     // eat '(', then look for identifiers for arguments
      while(getNextToken() == tok_identifier) { 
        ArgNames.push_back(m_lexer.getIdentifierStr());
      }
      if (m_lexer.getCurTok() != ')') {
        return LogError<PrototypeAST>("Expected ')' in prototype!");
      }
-     getNextToken();
+     getNextToken(); // eat ')'
 
      return std::make_unique<PrototypeAST> (fnName, std::move(ArgNames));
    }
    std::unique_ptr<FunctionAST> ParseDefinition() {
-     getNextToken();
+     getNextToken(); // eat fn.
      auto Proto = ParsePrototype();
      if (!Proto) return nullptr;
 
@@ -468,7 +519,7 @@ class parser {
      return nullptr;
    }
    std::unique_ptr<PrototypeAST> ParseExtern() {
-     getNextToken();
+     getNextToken(); // eat incl.
      return ParsePrototype();
    }
    std::unique_ptr<FunctionAST> ParseTopLevelExpr() {
@@ -479,14 +530,15 @@ class parser {
      return nullptr;
    }
 
-   void InitializeModuleAndPassManager() {
+   void InitializeModuleAndPassManager() { // Renamed for clarity
      TheContext = std::make_unique<llvm::LLVMContext>();
-     TheModule = std::make_unique<llvm::Module>("my cool jit", *TheContext);
+     TheModule = std::make_unique<llvm::Module>("small_lang", *TheContext);
      if (TheJIT) {
         TheModule->setDataLayout(TheJIT->getDataLayout());
      } else {
        llvm::errs() << "Warning: TheJIT is not initialized. Module DataLayout may be incorrect or missing.\n";
      }
+
 
      Builder = std::make_unique<llvm::IRBuilder<>>(*TheContext);
 
@@ -496,7 +548,7 @@ class parser {
      TheCGAM = std::make_unique<llvm::CGSCCAnalysisManager>();
      TheMAM = std::make_unique<llvm::ModuleAnalysisManager>();
      ThePIC = std::make_unique<llvm::PassInstrumentationCallbacks>();
-     TheSI = std::make_unique<llvm::StandardInstrumentations>(*TheContext, true);
+     TheSI = std::make_unique<llvm::StandardInstrumentations>(*TheContext, false);
      
      TheSI->registerCallbacks(*ThePIC, TheMAM.get());
 
@@ -509,6 +561,7 @@ class parser {
      PB.registerModuleAnalyses(*TheMAM);
      PB.registerFunctionAnalyses(*TheFAM);
      PB.crossRegisterProxies(*TheLAM, *TheFAM, *TheCGAM, *TheMAM);
+     
    }
 
    void HandleDefinition() {
@@ -519,6 +572,7 @@ class parser {
          llvm::errs() << '\n';
        }
      } else {
+       // Skip token for error recovery.
        getNextToken();
      }
    }
@@ -528,9 +582,10 @@ class parser {
          llvm::outs() << "Parsed an extern:\n";
          fnIR->print(llvm::errs());
          llvm::errs() << '\n';
-         FunctionProtos[ProtoAST->getName()] = std::move(ProtoAST);
+         FunctionProtos[ProtoAST->getName()] = std::move(ProtoAST); 
        }
      } else {
+       // Skip token for error recovery.
        getNextToken();
      }
   }
@@ -545,10 +600,18 @@ class parser {
            auto RT = TheJIT->getMainJITDylib().createResourceTracker();
            auto TSM = llvm::orc::ThreadSafeModule(std::move(TheModule), std::move(TheContext));
            ExitOnErr(TheJIT->addIRModule(RT, std::move(TSM)));
-           InitializeModuleAndPassManager();
+           
+           // Reinitialize the Module and Context for the next inputs.
+           InitializeModuleAndPassManager(); 
+
            auto ExprSymbol = ExitOnErr(TheJIT->lookup("__anon_expr"));
+
+           // Cast the retrieved address to a function pointer with the correct signature.
            double (*FP)() = ExprSymbol.toPtr<double (*)()>();
+
            llvm::outs() << "Evaluated to: " << FP() << "\n";
+
+           // Remove the module from the JIT now that we are done with it.
            ExitOnErr(RT->remove());
          }
        }
@@ -563,7 +626,7 @@ class parser {
         case tok_eof:
           llvm::outs() << "Exiting.\n";
           return;
-        case ';':
+        case ';': // ignore top-level semicolons.
           getNextToken();
           break;
         case tok_def:
@@ -580,6 +643,22 @@ class parser {
    }
 };
 
+#ifdef _WIN32
+#define DLLEXPORT __declspec(dllexport)
+#else
+#define DLLEXPORT
+#endif
+
+extern "C" DLLEXPORT double putchard(double x) {
+  fputc((char)x, stderr);
+  return 0;
+}
+
+extern "C" DLLEXPORT double printd(double x) {
+  fprintf(stderr, "%f\n", x);
+  return 0;
+}
+
 int main() {
  llvm::InitializeNativeTarget();
  llvm::InitializeNativeTargetAsmPrinter();
@@ -587,7 +666,7 @@ int main() {
 
  lexer lex;
  parser my_lang(lex);
-
+ 
  auto JITBuilder = llvm::orc::LLJITBuilder();
  TheJIT = ExitOnErr(JITBuilder.create());
  if (!TheJIT) {
@@ -602,57 +681,6 @@ int main() {
  
  my_lang.MainLoop();
 
+ 
  return 0;
 }
-
-// next implementation:
-//
-//class AssignExprAST : public ExprAST {
-// private:
-//   std::string VarName;
-//   std::unique_ptr<ExprAST> Expr;
-// public:
-//   AssignExprAST(const std::string &VarName, std::unique_ptr<ExprAST> Expr)
-//       : VarName(VarName), Expr(std::move(Expr)) {}
-//   llvm::Value *codegen() override;
-//};
-//
-//llvm::Value *AssignExprAST::codegen() {
-// llvm::Value *Val = Expr->codegen();
-// if (!Val)
-//   return nullptr;
-// NamedValues[VarName] = Val;
-// return Val;
-//}
-//
-//
-//std::unique_ptr<ExprAST> ParseAssignmentExpr(std::unique_ptr<ExprAST> LHS, parser &p) {
-// // Only allow assignment to variables
-// auto *Var = dynamic_cast<VariableExprAST*>(LHS.get());
-// if (!Var)
-//   return nullptr;
-// p.getNextToken(); // eat '='
-// auto RHS = p.ParseExpression();
-// if (!RHS)
-//   return nullptr;
-// return std::make_unique<AssignExprAST>(Var->getName(), std::move(RHS));
-//}
-//
-//// In parser::ParsePrimary, after ParseIdentifierExpr() case:
-//std::unique_ptr<ExprAST> ParsePrimary() {
-//  switch(m_lexer.getCurTok()) {
-//    default:
-//      return LogError<ExprAST>("Unknown token when expecting an expression");
-//    case tok_identifier: {
-//      auto LHS = ParseIdentifierExpr();
-//      if (m_lexer.getCurTok() == '=') {
-//        return ParseAssignmentExpr(std::move(LHS), *this);
-//      }
-//      return LHS;
-//    }
-//    case tok_number:
-//      return ParseNumberExpr();
-//    case '(':
-//      return ParseParenExpr();
-//  }
-//}
