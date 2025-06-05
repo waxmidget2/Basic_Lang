@@ -1,10 +1,3 @@
-/* BASIC compiler
-* sourcefile: main.cpp
-*
-*
-*
-*/
-
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/BasicBlock.h"
@@ -26,11 +19,8 @@
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/Reassociate.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
-#include "llvm/Support/Error.h" // Required for ExitOnError
-// #include "KaleidoscopeJIT.h" // Assumed header for KaleidoscopeJIT if used directly
-// If KaleidoscopeJIT is not available, LLJIT is a common alternative:
+#include "llvm/Support/Error.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
-
 
 #include <algorithm>
 #include <cassert>
@@ -42,18 +32,15 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <iostream> // For llvm::errs() / llvm::outs()
-
+#include <iostream>
 
 enum Token {
  tok_eof = -1,
  tok_def = -2,
  tok_extern = -3,
-
  tok_identifier = -4,
  tok_number = -5,
 };
-
 
 class ExprAST;
 class NumberExprAST;
@@ -63,15 +50,11 @@ class CallExprAST;
 class PrototypeAST;
 class FunctionAST;
 
-// LLVM Global Variables - ensure these are static if they are file-scoped globals
 static std::unique_ptr<llvm::LLVMContext> TheContext;
 static std::unique_ptr<llvm::Module> TheModule;
 static std::unique_ptr<llvm::IRBuilder<>> Builder;
 static std::map<std::string, llvm::Value *> NamedValues;
-// Assuming KaleidoscopeJIT is a class like the one in LLVM tutorials.
-// If not, this might need to be llvm::orc::LLJIT or similar.
-// static std::unique_ptr<llvm::KaleidoscopeJIT> TheJIT;
-static std::unique_ptr<llvm::orc::LLJIT> TheJIT; // Using LLJIT as a common JIT class
+static std::unique_ptr<llvm::orc::LLJIT> TheJIT;
 static std::unique_ptr<llvm::FunctionPassManager> TheFPM;
 static std::unique_ptr<llvm::LoopAnalysisManager> TheLAM;
 static std::unique_ptr<llvm::FunctionAnalysisManager> TheFAM;
@@ -82,7 +65,6 @@ static std::unique_ptr<llvm::StandardInstrumentations> TheSI;
 static std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;
 static llvm::ExitOnError ExitOnErr;
 
-// Base class for expression nodes.
 class ExprAST {
  public:
    virtual ~ExprAST() = default;
@@ -152,18 +134,11 @@ class FunctionAST {
    llvm::Function *codegen();
 };
 
-// Redundant global declarations were removed from here.
-// The static ones at the top are the correct ones.
-
- // error reporting
 llvm::Value *LogErrorV(const char *Str) {
  llvm::errs() << "LLVM Error: " << Str << '\n';
  return nullptr;
 }
-// llvm::Function *LogErrorF(const char *Str) { // This function is declared but not used in the snippet
-//  llvm::errs() << "LLVM Error: " << Str << '\n';
-//  return nullptr;
-// }
+
 llvm::Value *NumberExprAST::codegen() {
  return llvm::ConstantFP::get(*TheContext, llvm::APFloat(Val));
 }
@@ -196,10 +171,8 @@ llvm::Value *BinaryExprAST::codegen() {
  }
 }
 llvm::Value *CallExprAST::codegen() {
- // Look up the name in the global module table.
  llvm::Function *CalleeF = TheModule->getFunction(Callee);
  if (!CalleeF) {
-   // If not, check if it's a known prototype.
    auto FI = FunctionProtos.find(Callee);
    if (FI != FunctionProtos.end()) {
        CalleeF = FI->second->codegen();
@@ -233,7 +206,6 @@ llvm::Function *PrototypeAST::codegen() {
 }
  
 llvm::Function *FunctionAST::codegen() {
- // First, check for an existing function from a previous 'extern' declaration.
  llvm::Function *TheFunction = TheModule->getFunction(Proto->getName());
 
  if(!TheFunction) {
@@ -243,8 +215,6 @@ llvm::Function *FunctionAST::codegen() {
  if(!TheFunction) {
    return nullptr;
  }
- 
- // TODO: Check for function redefinition: if (TheFunction->empty()) is false, it's a redefinition.
 
  llvm::BasicBlock *BB = llvm::BasicBlock::Create(*TheContext, "entry", TheFunction);
  Builder->SetInsertPoint(BB);
@@ -258,14 +228,12 @@ llvm::Function *FunctionAST::codegen() {
 
    llvm::verifyFunction(*TheFunction);
    
-   // Run the optimizer on the function.
    if (TheFPM) {
        TheFPM->run(*TheFunction, *TheFAM);
    }
 
    return TheFunction;
  }
- // Error reading body, remove function.
  TheFunction->eraseFromParent();
  return nullptr;
 }
@@ -276,7 +244,7 @@ struct lexer {
    int CurTok;
    int LastChar;
 
-   lexer() : CurTok(0), LastChar(' ') {} // Initialize CurTok
+   lexer() : CurTok(0), LastChar(' ') {}
    int gettok() {
        while (isspace(LastChar)) { LastChar = getchar(); }
 
@@ -284,7 +252,7 @@ struct lexer {
        IdentifierStr.clear();
        IdentifierStr += static_cast<char>(LastChar);
 
-       while(isalnum((LastChar = getchar()))) { // Corrected: assign then check
+       while(isalnum((LastChar = getchar()))) {
          IdentifierStr += static_cast<char>(LastChar);
        }
 
@@ -308,7 +276,7 @@ struct lexer {
        return tok_number;
      }
 
-     if (LastChar == '#') { // Comment until end of line
+     if (LastChar == '#') {
        do {
          LastChar = getchar();
        } while (LastChar != EOF && LastChar != '\n' && LastChar != '\r');
@@ -328,7 +296,6 @@ struct lexer {
    }
    const std::string& getIdentifierStr() const { return IdentifierStr; }
    double getNumVal() const { return NumVal; }
-   // void setCurTok(int tok) { CurTok = tok; } // Not used in this version
    int getCurTok() const { return CurTok; }
 };
 
@@ -341,17 +308,15 @@ class parser {
    parser(lexer& lexer_instance) : m_lexer(lexer_instance) {
      BinopPrecedence['<'] = 10;
      BinopPrecedence['+'] = 20;
-     BinopPrecedence['-'] = 20; // Same precedence as +
-     BinopPrecedence['*'] = 40; // Higher precedence
+     BinopPrecedence['-'] = 20;
+     BinopPrecedence['*'] = 40;
    }
 
-   
    int getTokPrecedence() {
      if (!isascii(m_lexer.getCurTok())) {
        return -1;
      }
 
-     // Make sure it's a declared binop.
      int TokPrec = BinopPrecedence[static_cast<char>(m_lexer.getCurTok())];
      if (TokPrec <= 0) return -1;
      return TokPrec;
@@ -392,12 +357,12 @@ class parser {
 
    std::unique_ptr<ExprAST> ParseNumberExpr() {
      auto Result = std::make_unique<NumberExprAST>(m_lexer.getNumVal());
-     getNextToken(); // consume the number
+     getNextToken();
      return std::move(Result);
    } 
    
    std::unique_ptr<ExprAST> ParseParenExpr() {
-     getNextToken(); // eat (.
+     getNextToken();
      auto V = ParseExpression();
      
      if (!V) {
@@ -408,21 +373,20 @@ class parser {
        return LogError<ExprAST>("expected ')'");
      }
      
-     getNextToken(); // eat ).
+     getNextToken();
      return V;
    }
 
    std::unique_ptr<ExprAST> ParseIdentifierExpr() {
      std::string IdName = m_lexer.getIdentifierStr();
 
-     getNextToken(); // eat identifier.
+     getNextToken();
 
-     if (m_lexer.getCurTok() != '(') { // Simple variable ref.
+     if (m_lexer.getCurTok() != '(') {
        return std::make_unique<VariableExprAST> (IdName);
      }
 
-     // Call.
-     getNextToken(); // eat (
+     getNextToken();
      std::vector<std::unique_ptr<ExprAST>> Args;
      
      if(m_lexer.getCurTok() != ')') {
@@ -441,7 +405,7 @@ class parser {
          getNextToken();
        }
      }
-     getNextToken(); // Eat the ')'.
+     getNextToken();
 
      return std::make_unique<CallExprAST> (IdName, std::move(Args));
    }
@@ -454,7 +418,7 @@ class parser {
        }
 
        int BinOp = m_lexer.getCurTok();
-       getNextToken(); // eat binop
+       getNextToken();
 
        auto RHS = ParsePrimary();
        if (!RHS) {
@@ -483,19 +447,18 @@ class parser {
      }
 
      std::vector<std::string> ArgNames;
-     // eat '(', then look for identifiers for arguments
      while(getNextToken() == tok_identifier) { 
        ArgNames.push_back(m_lexer.getIdentifierStr());
      }
      if (m_lexer.getCurTok() != ')') {
        return LogError<PrototypeAST>("Expected ')' in prototype!");
      }
-     getNextToken(); // eat ')'
+     getNextToken();
 
      return std::make_unique<PrototypeAST> (fnName, std::move(ArgNames));
    }
    std::unique_ptr<FunctionAST> ParseDefinition() {
-     getNextToken(); // eat fn.
+     getNextToken();
      auto Proto = ParsePrototype();
      if (!Proto) return nullptr;
 
@@ -505,66 +468,47 @@ class parser {
      return nullptr;
    }
    std::unique_ptr<PrototypeAST> ParseExtern() {
-     getNextToken(); // eat incl.
+     getNextToken();
      return ParsePrototype();
    }
    std::unique_ptr<FunctionAST> ParseTopLevelExpr() {
      if (auto E = ParseExpression()) {
-       // Make an anonymous proto.
        auto Proto = std::make_unique<PrototypeAST>("__anon_expr", std::vector<std::string>());
        return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
      }
      return nullptr;
    }
 
-   void InitializeModuleAndPassManager() { // Renamed for clarity
+   void InitializeModuleAndPassManager() {
      TheContext = std::make_unique<llvm::LLVMContext>();
      TheModule = std::make_unique<llvm::Module>("my cool jit", *TheContext);
-     // Set the data layout for the module from the JIT
-     // This requires TheJIT to be initialized and have a getDataLayout() method.
      if (TheJIT) {
         TheModule->setDataLayout(TheJIT->getDataLayout());
      } else {
        llvm::errs() << "Warning: TheJIT is not initialized. Module DataLayout may be incorrect or missing.\n";
-       // You might want to set a default data layout if the JIT isn't available,
-       // or ensure TheJIT is always created before this point.
-       // For example, using the host target triple if no JIT:
-       // auto TargetTriple = llvm::sys::getDefaultTargetTriple();
-       // TheModule->setTargetTriple(TargetTriple);
-       // Or, this function should only be called after TheJIT is confirmed valid.
      }
-
 
      Builder = std::make_unique<llvm::IRBuilder<>>(*TheContext);
 
-     // Create a new pass manager associated with the module.
      TheFPM = std::make_unique<llvm::FunctionPassManager>();
      TheLAM = std::make_unique<llvm::LoopAnalysisManager>();
      TheFAM = std::make_unique<llvm::FunctionAnalysisManager>();
      TheCGAM = std::make_unique<llvm::CGSCCAnalysisManager>();
      TheMAM = std::make_unique<llvm::ModuleAnalysisManager>();
      ThePIC = std::make_unique<llvm::PassInstrumentationCallbacks>();
-     TheSI = std::make_unique<llvm::StandardInstrumentations>(*TheContext, /*DebugLogging=*/true);
+     TheSI = std::make_unique<llvm::StandardInstrumentations>(*TheContext, true);
      
      TheSI->registerCallbacks(*ThePIC, TheMAM.get());
 
-     // Add transform passes.
-     // Do simple "peephole" optimizations and bit-twiddling optzns.
      TheFPM->addPass(llvm::InstCombinePass());
-     // Reassociate expressions.
      TheFPM->addPass(llvm::ReassociatePass());
-     // Eliminate Common SubExpressions.
      TheFPM->addPass(llvm::GVNPass());
-     // Simplify the control flow graph (deleting unreachable blocks, etc).
      TheFPM->addPass(llvm::SimplifyCFGPass());
 
      llvm::PassBuilder PB;
      PB.registerModuleAnalyses(*TheMAM);
      PB.registerFunctionAnalyses(*TheFAM);
      PB.crossRegisterProxies(*TheLAM, *TheFAM, *TheCGAM, *TheMAM);
-     
-     // The problematic 'if' block that was here has been removed.
-     // Code generation and running passes on specific functions happen in FunctionAST::codegen().
    }
 
    void HandleDefinition() {
@@ -573,13 +517,8 @@ class parser {
          llvm::outs() << "Parsed a function definition:\n";
          fnIR->print(llvm::errs());
          llvm::errs() << '\n';
-         // For JITting, you would add the module to the JIT here.
-         // Example: ExitOnErr(TheJIT->addModule(llvm::orc::ThreadSafeModule(std::move(TheModule), std::move(TheContext))));
-         // And then you'd typically reinitialize TheModule and TheContext for the next definition.
-         // InitializeModuleAndPassManager(); 
        }
      } else {
-       // Skip token for error recovery.
        getNextToken();
      }
    }
@@ -589,45 +528,31 @@ class parser {
          llvm::outs() << "Parsed an extern:\n";
          fnIR->print(llvm::errs());
          llvm::errs() << '\n';
-         FunctionProtos[ProtoAST->getName()] = std::move(ProtoAST); // Record new extern
+         FunctionProtos[ProtoAST->getName()] = std::move(ProtoAST);
        }
      } else {
-       // Skip token for error recovery.
        getNextToken();
      }
   }
   void HandleTopLevelExpression() {
-     // Evaluate a top-level expression into an anonymous function.
      if (auto fnAST = ParseTopLevelExpr()) {
        if (auto *fnIR = fnAST->codegen()) {  
          llvm::outs() << "Parsed a top-level expr:\n";
          fnIR->print(llvm::errs());
          llvm::errs() << '\n';
 
-         // JIT the module containing the anonymous expression, execute it, and remove it.
-         // This requires TheJIT to be properly initialized.
          if (TheJIT) {
            auto RT = TheJIT->getMainJITDylib().createResourceTracker();
            auto TSM = llvm::orc::ThreadSafeModule(std::move(TheModule), std::move(TheContext));
            ExitOnErr(TheJIT->addIRModule(RT, std::move(TSM)));
-           
-           // Reinitialize the Module and Context for the next inputs.
-           InitializeModuleAndPassManager(); 
-
-           // Look up the JIT'd code for our anonymous expression.
+           InitializeModuleAndPassManager();
            auto ExprSymbol = ExitOnErr(TheJIT->lookup("__anon_expr"));
-
-           // Cast the retrieved address to a function pointer with the correct signature.
            double (*FP)() = ExprSymbol.toPtr<double (*)()>();
-
            llvm::outs() << "Evaluated to: " << FP() << "\n";
-
-           // Remove the module from the JIT now that we are done with it.
            ExitOnErr(RT->remove());
          }
        }
      } else {
-       // Skip token for error recovery.
        getNextToken();
      }
    }
@@ -638,7 +563,7 @@ class parser {
         case tok_eof:
           llvm::outs() << "Exiting.\n";
           return;
-        case ';': // ignore top-level semicolons.
+        case ';':
           getNextToken();
           break;
         case tok_def:
@@ -662,8 +587,7 @@ int main() {
 
  lexer lex;
  parser my_lang(lex);
- 
- setup depends on the JIT (e.g., for DataLayout).
+
  auto JITBuilder = llvm::orc::LLJITBuilder();
  TheJIT = ExitOnErr(JITBuilder.create());
  if (!TheJIT) {
@@ -678,6 +602,5 @@ int main() {
  
  my_lang.MainLoop();
 
- 
  return 0;
 }
