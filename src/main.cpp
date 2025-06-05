@@ -604,3 +604,55 @@ int main() {
 
  return 0;
 }
+
+// next implementation:
+//
+//class AssignExprAST : public ExprAST {
+// private:
+//   std::string VarName;
+//   std::unique_ptr<ExprAST> Expr;
+// public:
+//   AssignExprAST(const std::string &VarName, std::unique_ptr<ExprAST> Expr)
+//       : VarName(VarName), Expr(std::move(Expr)) {}
+//   llvm::Value *codegen() override;
+//};
+//
+//llvm::Value *AssignExprAST::codegen() {
+// llvm::Value *Val = Expr->codegen();
+// if (!Val)
+//   return nullptr;
+// NamedValues[VarName] = Val;
+// return Val;
+//}
+//
+//
+//std::unique_ptr<ExprAST> ParseAssignmentExpr(std::unique_ptr<ExprAST> LHS, parser &p) {
+// // Only allow assignment to variables
+// auto *Var = dynamic_cast<VariableExprAST*>(LHS.get());
+// if (!Var)
+//   return nullptr;
+// p.getNextToken(); // eat '='
+// auto RHS = p.ParseExpression();
+// if (!RHS)
+//   return nullptr;
+// return std::make_unique<AssignExprAST>(Var->getName(), std::move(RHS));
+//}
+//
+//// In parser::ParsePrimary, after ParseIdentifierExpr() case:
+//std::unique_ptr<ExprAST> ParsePrimary() {
+//  switch(m_lexer.getCurTok()) {
+//    default:
+//      return LogError<ExprAST>("Unknown token when expecting an expression");
+//    case tok_identifier: {
+//      auto LHS = ParseIdentifierExpr();
+//      if (m_lexer.getCurTok() == '=') {
+//        return ParseAssignmentExpr(std::move(LHS), *this);
+//      }
+//      return LHS;
+//    }
+//    case tok_number:
+//      return ParseNumberExpr();
+//    case '(':
+//      return ParseParenExpr();
+//  }
+//}
