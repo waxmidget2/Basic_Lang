@@ -1,3 +1,4 @@
+// LLVM INCLUDES
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/BasicBlock.h"
@@ -21,8 +22,10 @@
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Support/Error.h" 
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/Support/DynamicLibrary.h"
+// END LLVM INCLUDES
 
-
+// C++ INCLUDES
 #include <algorithm>
 #include <cassert>
 #include <cctype>
@@ -34,8 +37,9 @@
 #include <string>
 #include <vector>
 #include <iostream> 
+// END C++ INCLUDES
 
-
+// BEGIN TOKEN ENUMERATION
 enum Token {
  tok_eof = -1,
  tok_def = -2,
@@ -44,8 +48,9 @@ enum Token {
  tok_identifier = -4,
  tok_number = -5,
 };
+// END TOKEN ENUMERATION
 
-
+// BEGIN AST FORWARD DECLARATIONS
 class ExprAST;
 class NumberExprAST;
 class VariableExprAST;
@@ -53,11 +58,12 @@ class BinaryExprAST;
 class CallExprAST;
 class PrototypeAST;
 class FunctionAST;
+// END AST FORWARD DECLARATIONS
 
+// BEGIN LLVM CONTEXT
 static std::unique_ptr<llvm::LLVMContext> TheContext;
 static std::unique_ptr<llvm::Module> TheModule;
 static std::unique_ptr<llvm::IRBuilder<>> Builder;
-static std::map<std::string, llvm::Value *> NamedValues;
 static std::unique_ptr<llvm::orc::LLJIT> TheJIT;
 static std::unique_ptr<llvm::FunctionPassManager> TheFPM;
 static std::unique_ptr<llvm::LoopAnalysisManager> TheLAM;
@@ -67,98 +73,185 @@ static std::unique_ptr<llvm::ModuleAnalysisManager> TheMAM;
 static std::unique_ptr<llvm::PassInstrumentationCallbacks> ThePIC;
 static std::unique_ptr<llvm::StandardInstrumentations> TheSI;
 static std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;
+static std::map<std::string, llvm::Value *> NamedValues;
 static llvm::ExitOnError ExitOnErr;
+// END LLVM CONTEXT
 
-// Base class for expression nodes.
-class ExprAST {
- public:
-   virtual ~ExprAST() = default;
-   virtual llvm::Value *codegen() = 0;
-};
 
+// ---------------------------------BEGIN AST DEFINITION ------------------------------------------
+
+/*
+  Comments with '*' are used to explain the purpose of each class and method.
+
+  The AST (Abstract Syntax Tree) is a representation of the structure of the source code.
+  Each class represents a different type of expression or statement in the language.
+*/
+
+// * AST Base Class.
+struct ExprAST {
+  // [1st] * LLVM Code generation, inherited by derived classes.
+  // [2nd] Virtual destructor to ensure proper cleanup of derived classes.
+    
+  virtual ~ExprAST() = default; // [1st]
+
+  virtual llvm::Value *codegen() = 0; // [2nd]
+}; 
+// FOLLOWING CLASSES USE EXPRAST: class foobar : public ExprAST { body }; 
+
+// * Expression AST Nodes.
 class NumberExprAST : public ExprAST {
- double Val;
+  private:
+    // [1st] Accepts a value for a node.
+    
+    double Val; // [1st]
+  
+  public:
+    // [1st] Constructor for NumberExprAST, initializes the value.
+    // [2nd] * LLVM Code Generation function for NumberExprAST.
+    
+    NumberExprAST(double Val) : Val(Val) {} // [1st]
 
- public:
-   NumberExprAST(double Val) : Val(Val) {}
-   llvm::Value *codegen() override;
+    llvm::Value *codegen() override; // [2nd]
 };
 
+// * VariableExprAST AST Nodes.
 class VariableExprAST : public ExprAST {
- private:
-   std::string Name;
+private:
+  // [1st] Holds the name of the variable.
 
- public:
-   VariableExprAST(const std::string& Name) : Name(Name) {}
-    const std::string &getName() const { return Name; }
-   llvm::Value *codegen() override;
+  std::string Name; // [1st]
+
+public:
+  // [1st] Constructor for VariableExprAST, initializes the variable name. 
+  // [2nd] * Getter function for variable name.
+  // [3rd] * LLVM Code Generation function for VariableExprAST.
+
+
+  VariableExprAST(const std::string& Name) : Name(Name) {} // [1st]
+
+  const std::string &getName() const { return Name; } // [2nd]
+  
+  llvm::Value *codegen() override; // [3rd]
 };
 
+// * BinaryExprAST represents a binary operation
 class BinaryExprAST : public ExprAST {
- private:
-   char Op;
-   std::unique_ptr<ExprAST> LHS, RHS;
+private:
+  // [1st] Holds the operator for the binary expression, e.g., '+', '-', '*', '<'.
+  // [2nd] Holds the left-hand side and right-hand side expressions.
+  //       e.x., for 'a + b', lhs is 'a' and rhs is 'b'.
+  
+  char Op; // [1st]
 
- public:
-   BinaryExprAST(char Op, std::unique_ptr<ExprAST> LHS, std::unique_ptr<ExprAST> RHS)
-       : Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
-   llvm::Value *codegen() override;
+  std::unique_ptr<ExprAST> LHS, RHS; // [2nd]
+
+public:
+  // [1st] Constructor for BinaryExprAST, initializes the operator and the two expressions.
+  //       Owner uses std::move to transfer. [IMPORTANT]
+  // [2nd] * LLVM Code Generation function for BinaryExprAST.
+
+  BinaryExprAST(char Op, std::unique_ptr<ExprAST> LHS, std::unique_ptr<ExprAST> RHS)
+      : Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {} // [1st]
+
+  llvm::Value *codegen() override; // [2nd]
 };
 
+// * CallExprAST represents a function call expression
 class CallExprAST : public ExprAST {
- private:
-   std::string Callee;
-   std::vector<std::unique_ptr<ExprAST>> Args;
+private:
+  // [1st] Holds callee name (function name).
+  // [2nd] Holds arguments for the function call.
+
+  std::string Callee; // [1st]
+
+  std::vector<std::unique_ptr<ExprAST>> Args; // [2nd]
  
  public:
+    // [1st] Constructor for CallExprAST
+    // [2nd] * LLVM Code generation function.
+
    CallExprAST(const std::string& Callee, std::vector<std::unique_ptr<ExprAST>> Args)
-       : Callee(Callee), Args(std::move(Args)) {}
-   llvm::Value *codegen() override;
+       : Callee(Callee), Args(std::move(Args)) {} // [1st]
+
+   llvm::Value *codegen() override; // [2nd]
 };
 
+// * PrototypeAST represents a function prototype
 class PrototypeAST {
- private:
-   std::string Name;
-   std::vector<std::string> Args;
- public:
-   PrototypeAST(const std::string &Name, std::vector<std::string> Args)
-       : Name(Name), Args(std::move(Args)) {}
+private:
+  // [1st] Holds the name of the function.
+  // [2nd] Holds the argument names for the function prototype.
 
-   const std::string &getName() const { return Name; }
-   llvm::Function *codegen();
+  std::string Name; // [1st]
+
+  std::vector<std::string> Args; // [2nd]
+
+public:
+  // [1st] Constructor for PrototypeAST, initializes the function name and arguments.
+  // [2nd] * Getter function for the function name.
+  // [3rd] * LLVM Code generation function for PrototypeAST.
+
+  PrototypeAST(const std::string &Name, std::vector<std::string> Args)
+      : Name(Name), Args(std::move(Args)) {} // [1st]
+
+  const std::string &getName() const { return Name; } // [2nd]
+
+  llvm::Function *codegen(); // [3rd]
 };
 
 class FunctionAST {
- private:
-   std::unique_ptr<PrototypeAST> Proto;
-   std::unique_ptr<ExprAST> Body;
+private:
+  // [1st] Holds the function prototype.
+  // [2nd] Holds the function body (expression).
+
+  std::unique_ptr<PrototypeAST> Proto; // [1st]
+
+  std::unique_ptr<ExprAST> Body; // [2nd]
  
- public:
+public:
+  // [1st] Constructor for FunctionAST, initializes the prototype and body.
+  // [2nd] * LLVM Code generation function for FunctionAST.
+  // [3rd] * Getter function for the prototype.
+
   FunctionAST(std::unique_ptr<PrototypeAST> Proto,
               std::unique_ptr<ExprAST> Body)
-      : Proto(std::move(Proto)), Body(std::move(Body)) {}
-  llvm::Function *codegen();
+      : Proto(std::move(Proto)), Body(std::move(Body)) {} // [1st]
+
+  llvm::Function *codegen(); // [2nd]
+  const PrototypeAST *getProto() const { return Proto.get(); } // [3rd]
 };
 
 class AssignExprAST : public ExprAST {
 private:
-  std::string VarName;
-  std::unique_ptr<ExprAST> Expr;
+  // [1st] Holds the variable name for assignment.
+  // [2nd] Holds the expression to assign to the variable.
+  
+  std::string VarName; // [1st]
+
+  std::unique_ptr<ExprAST> Expr; // [2nd]
 public:
+  // [1st] Constructor for AssignExprAST, initializes the variable name and expression.
+  // [2nd] * Getter function for the variable name.
+  // [3rd] * LLVM Code generation function for AssignExprAST.
+
   AssignExprAST(const std::string &VarName, std::unique_ptr<ExprAST> Expr)
-      : VarName(VarName), Expr(std::move(Expr)) {}
-  const std::string &getName() const { return VarName; }
-  llvm::Value *codegen() override;
+      : VarName(VarName), Expr(std::move(Expr)) {} // [1st]
+
+  const std::string &getName() const { return VarName; } // [2nd]
+
+  llvm::Value *codegen() override; // [3rd]
 };
- // error reporting
+
+// -------------------------------------END AST DEFINITION ------------------------------------------
+
+// * LLVM ERROR HANDLING
 llvm::Value *LogErrorV(const char *Str) {
  llvm::errs() << "LLVM Error: " << Str << '\n';
  return nullptr;
 }
-// llvm::Function *LogErrorF(const char *Str) { // This function is declared but not used in the snippet
-//  llvm::errs() << "LLVM Error: " << Str << '\n';
-//  return nullptr;
-// }
+// * END LLVM ERROR HANDLING
+
+// ---------------------------------BEGIN CODEGEN IMPLEMENTATIONS--------------------------------
 llvm::Value *NumberExprAST::codegen() {
  return llvm::ConstantFP::get(*TheContext, llvm::APFloat(Val));
 }
@@ -169,6 +262,7 @@ llvm::Value *VariableExprAST::codegen() {
  }
  return V;
 }
+
 llvm::Value *BinaryExprAST::codegen() {
  llvm::Value *L = LHS->codegen();
  llvm::Value *R = RHS->codegen();
@@ -222,6 +316,7 @@ llvm::Value *CallExprAST::codegen() {
  }
  return Builder->CreateCall(CalleeF, ArgsV, "calltmp");
 }
+
 llvm::Function *PrototypeAST::codegen() {
  std::vector<llvm::Type *> Doubles(Args.size(), llvm::Type::getDoubleTy(*TheContext));
  llvm::FunctionType *FT = llvm::FunctionType::get(llvm::Type::getDoubleTy(*TheContext), Doubles, false);
@@ -245,7 +340,6 @@ llvm::Function *FunctionAST::codegen() {
    return nullptr;
  }
  
-
  llvm::BasicBlock *BB = llvm::BasicBlock::Create(*TheContext, "entry", TheFunction);
  Builder->SetInsertPoint(BB);
 
@@ -530,38 +624,35 @@ class parser {
      return nullptr;
    }
 
-   void InitializeModuleAndPassManager() { // Renamed for clarity
-     TheContext = std::make_unique<llvm::LLVMContext>();
-     TheModule = std::make_unique<llvm::Module>("small_lang", *TheContext);
-     if (TheJIT) {
-        TheModule->setDataLayout(TheJIT->getDataLayout());
-     } else {
-       llvm::errs() << "Warning: TheJIT is not initialized. Module DataLayout may be incorrect or missing.\n";
-     }
+   void InitializeModuleAndPassManager() {
+    TheContext = std::make_unique<llvm::LLVMContext>();
+    TheModule = std::make_unique<llvm::Module>("small_lang", *TheContext);
+    TheModule->setDataLayout(TheJIT->getDataLayout());
+    Builder = std::make_unique<llvm::IRBuilder<>>(*TheContext);
 
+    TheFPM = std::make_unique<llvm::FunctionPassManager>();
+    TheLAM = std::make_unique<llvm::LoopAnalysisManager>();
+    TheFAM = std::make_unique<llvm::FunctionAnalysisManager>();
+    TheCGAM = std::make_unique<llvm::CGSCCAnalysisManager>();
+    TheMAM = std::make_unique<llvm::ModuleAnalysisManager>();
+    ThePIC = std::make_unique<llvm::PassInstrumentationCallbacks>();
+    TheSI = std::make_unique<llvm::StandardInstrumentations>();
 
-     Builder = std::make_unique<llvm::IRBuilder<>>(*TheContext);
+    TheSI->registerCallbacks(*ThePIC);
 
-     TheFPM = std::make_unique<llvm::FunctionPassManager>();
-     TheLAM = std::make_unique<llvm::LoopAnalysisManager>();
-     TheFAM = std::make_unique<llvm::FunctionAnalysisManager>();
-     TheCGAM = std::make_unique<llvm::CGSCCAnalysisManager>();
-     TheMAM = std::make_unique<llvm::ModuleAnalysisManager>();
-     ThePIC = std::make_unique<llvm::PassInstrumentationCallbacks>();
-     TheSI = std::make_unique<llvm::StandardInstrumentations>(*TheContext, false);
-     
-     TheSI->registerCallbacks(*ThePIC, TheMAM.get());
+    TheFPM->addPass(llvm::InstCombinePass());
+    TheFPM->addPass(llvm::ReassociatePass());
+    TheFPM->addPass(llvm::SimplifyCFGPass());
 
-     TheFPM->addPass(llvm::InstCombinePass());
-     TheFPM->addPass(llvm::ReassociatePass());
-     TheFPM->addPass(llvm::GVNPass());
-     TheFPM->addPass(llvm::SimplifyCFGPass());
+    llvm::PassBuilder PB;
+    PB.registerModuleAnalyses(*TheMAM);
+    PB.registerFunctionAnalyses(*TheFAM);
+    PB.crossRegisterProxies(*TheLAM, *TheFAM, *TheCGAM, *TheMAM);
+    PB.registerCGSCCAnalyses(*TheCGAM);
+    PB.registerLoopAnalyses(*TheLAM);
+    PB.registerFunctionAnalyses(*TheFAM);
+    PB.registerModuleAnalyses(*TheMAM);
 
-     llvm::PassBuilder PB;
-     PB.registerModuleAnalyses(*TheMAM);
-     PB.registerFunctionAnalyses(*TheFAM);
-     PB.crossRegisterProxies(*TheLAM, *TheFAM, *TheCGAM, *TheMAM);
-     
    }
 
    void HandleDefinition() {
@@ -590,34 +681,33 @@ class parser {
      }
   }
   void HandleTopLevelExpression() {
-     if (auto fnAST = ParseTopLevelExpr()) {
-       if (auto *fnIR = fnAST->codegen()) {  
-         llvm::outs() << "Parsed a top-level expr:\n";
-         fnIR->print(llvm::errs());
-         llvm::errs() << '\n';
+    if (auto fnAST = ParseTopLevelExpr()) {
+        // Check if the top-level expression is an assignment
+        if (dynamic_cast<AssignExprAST*>(fnAST->getProto()->getName().c_str() == nullptr)) {
+            llvm::outs() << "Assignment at top level is not supported.\n";
+            return;
+        }
+        if (auto *fnIR = fnAST->codegen()) {  
+            llvm::outs() << "Parsed a top-level expr:\n";
+            fnIR->print(llvm::errs());
+            llvm::errs() << '\n';
 
-         if (TheJIT) {
-           auto RT = TheJIT->getMainJITDylib().createResourceTracker();
-           auto TSM = llvm::orc::ThreadSafeModule(std::move(TheModule), std::move(TheContext));
-           ExitOnErr(TheJIT->addIRModule(RT, std::move(TSM)));
-           
-           // Reinitialize the Module and Context for the next inputs.
-           InitializeModuleAndPassManager(); 
+            if (TheJIT) {
+                ExitOnErr(TheJIT->addIRModule(
+                    llvm::orc::ThreadSafeModule(std::move(TheModule), std::move(TheContext))
+                ));
 
-           auto ExprSymbol = ExitOnErr(TheJIT->lookup("__anon_expr"));
+                InitializeModuleAndPassManager(); 
 
-           // Cast the retrieved address to a function pointer with the correct signature.
-           double (*FP)() = ExprSymbol.toPtr<double (*)()>();
-
-           llvm::outs() << "Evaluated to: " << FP() << "\n";
-
-           // Remove the module from the JIT now that we are done with it.
-           ExitOnErr(RT->remove());
-         }
-       }
-     } else {
-       getNextToken();
-     }
+                auto ExprSymbol = ExitOnErr(TheJIT->lookup("__anon_expr"));
+                auto Addr = ExprSymbol.getAddress();
+                auto *FP = reinterpret_cast<double (*)()>(static_cast<uintptr_t>(Addr));
+                llvm::outs() << "Evaluated to: " << FP() << "\n";
+            }
+        }
+    } else {
+        getNextToken();
+    }
    }
   void MainLoop() {
     while (true) {
@@ -649,38 +739,38 @@ class parser {
 #define DLLEXPORT
 #endif
 
-extern "C" DLLEXPORT double putchard(double x) {
-  fputc((char)x, stderr);
-  return 0;
+extern "C" double printd(double);
+DLLEXPORT double printd(double x) {
+  std::cout << x << std::endl;
+  return x;
 }
 
-extern "C" DLLEXPORT double printd(double x) {
-  fprintf(stderr, "%f\n", x);
-  return 0;
-}
+static auto *printd_addr = (void*)&printd;
+
 
 int main() {
- llvm::InitializeNativeTarget();
- llvm::InitializeNativeTargetAsmPrinter();
- llvm::InitializeNativeTargetAsmParser();
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+  llvm::InitializeNativeTargetAsmParser();
 
- lexer lex;
- parser my_lang(lex);
- 
- auto JITBuilder = llvm::orc::LLJITBuilder();
- TheJIT = ExitOnErr(JITBuilder.create());
- if (!TheJIT) {
-     llvm::errs() << "Failed to create LLJIT instance.\n";
-     return 1;
- }
+  lexer lex;
+  parser my_lang(lex);
 
- my_lang.InitializeModuleAndPassManager();
- 
- llvm::outs() << "ready> ";
- my_lang.getNextToken();
- 
- my_lang.MainLoop();
+  TheJIT = ExitOnErr(llvm::orc::LLJITBuilder().create());
+  if (!TheJIT) {
+    llvm::errs() << "Failed to create LLJIT instance.\n";
+    return 1;
+  }
 
- 
- return 0;
+  // Register host process symbols for JIT (LLVM 10 way)
+  llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
+
+  my_lang.InitializeModuleAndPassManager();
+
+  llvm::outs() << "ready> ";
+  my_lang.getNextToken();
+
+  my_lang.MainLoop();
+
+  return 0;
 }

@@ -1,0 +1,4 @@
+/workspaces/Basic_Lang/src2/build/CMakeFiles/rebuild_cache.dir
+/workspaces/Basic_Lang/src2/build/CMakeFiles/edit_cache.dir
+/workspaces/Basic_Lang/src2/build/CMakeFiles/basic_lang2.dir
+/workspaces/Basic_Lang/src2/build/CMakeFiles/intrinsics_gen.dir
